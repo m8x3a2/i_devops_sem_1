@@ -52,5 +52,14 @@ WW_COUNT="$(find /var/www/devops-site -perm -o+w 2>/dev/null | wc -l)"
 KEY_MODE="$(sudo stat -c '%a' /etc/ssl/private/devops.key 2>/dev/null)"
 check "Нет файлов с записью для всех, права ключа 600" "0/600" "${WW_COUNT}/${KEY_MODE}"
 
+echo "[5] Контейнеризация"
+check "Служба docker активна" "active" "$(systemctl is-active docker)"
+check "Контейнер PostgreSQL исправен" "healthy" \
+      "$(sudo docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null || true)"
+PORT_STATUS="$(ss -H -tln | awk '$4 ~ /:(5000|5432)$/ && $4 !~ /^127[.]0[.]0[.]1:/ {bad=1} END {print bad ? "exposed" : "ok"}')"
+check "Порты 5000 и 5432 не доступны на внешних адресах" "ok" "$PORT_STATUS"
+DEVOPS_HOME="$(getent passwd devops | cut -d: -f6)"
+check "Права файла app/.env равны 600" "600" "$(stat -c '%a' "$DEVOPS_HOME/app/.env" 2>/dev/null || true)"
+
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

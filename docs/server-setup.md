@@ -251,7 +251,60 @@ HSTS не включается (самоподписанный сертифик�
 Содержимое доставляется из каталога `site/` репозитория сценарием `scripts/deploy.sh`
 (rsync с `--delete --chmod=D755,F644`, одно SSH-соединение, проверка `curl --cacert`).
 
-## 9. Снимки состояния
+## 9. Контейнеризация
+
+Docker Engine 29.9.2 и Docker Compose 5.6.1 установлены на Ubuntu 24.04 из официального репозитория Docker (пакеты `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`). Служба `docker` включена и запущена. Пользователь `devops` добавлен в группу `docker`; участники группы обладают фактическими правами root, поэтому другим пользователям она не выдаётся.
+
+Для восстановления после установки системы подключите официальный репозиторий Docker и установите пакеты:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && printf %s "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker devops
+# Начать новый SSH-сеанс, чтобы применить членство в группе.
+docker version
+docker compose version
+```
+
+Проект из каталога `app/` репозитория доставляется в `/home/devops/app/`. Файл `/home/devops/app/.env` принадлежит `devops`, имеет режим `600` и не хранится в Git. При восстановлении создайте его из `.env.example`, задайте пароль и права до первого запуска; при повторной доставке обязательно исключайте `.env`:
+
+```bash
+# На хосте из корня репозитория:
+rsync -avz --delete --exclude=.env --dry-run app/ devops:app/
+rsync -avz --delete --exclude=.env app/ devops:app/
+# На ВМ при первом развёртывании:
+cd ~/app
+cp .env.example .env
+chmod 600 .env
+# Задайте POSTGRES_PASSWORD в .env до создания базы.
+docker compose up -d --build
+docker compose ps
+```
+
+Сервис `db` использует `postgres:16-alpine`, сеть `app_backend` и именованный том `app_db_data` для каталога `/var/lib/postgresql/data`. Порт 5432 на ВМ не опубликован. Сервис `app` работает от непривилегированного пользователя, находит БД через DNS-имя `db` и публикует порт только как `127.0.0.1:5000:5000`. `docker compose down` сохраняет том; `docker compose down -v` удаляет данные базы.
+
+В HTTPS-блоке `/etc/nginx/sites-available/devops-site` добавьте, сохранив `location /` для статического ресурса:
+
+```nginx
+location /app/ {
+    proxy_pass http://127.0.0.1:5000/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Применение и проверка: `sudo nginx -t && sudo systemctl reload nginx`; на хосте `curl --cacert ~/devops.crt https://devops.local/app/health`.
+
+## 10. Снимки состояния
 
 | Снимок | Создан | Состояние |
 |---|---|---|
@@ -259,8 +312,9 @@ HSTS не включается (самоподписанный сертифик�
 | `02-keys-configured` | 13.10.2026 20:39 | пользователь `devops`, вход по ключу, `~/.ssh/config` на хосте |
 | `03-ssh-hardened` | 13.10.2026 21:08 | `99-hardening.conf`, порт 2222, сокет отключён, проброс 2222→2222 |
 | `04-nginx-https` | Пр6, после задания 2 | nginx, сертификат и ключ, ресурс `devops.local` по HTTPS, перенаправление HTTP→HTTPS |
+| `05-docker-compose` | Пр7 | Docker, Compose, приложение и PostgreSQL |
 
-## 10. Проверка
+## 11. Проверка
 
 Скрипт `scripts/audit.sh` проверяет основные параметры (код возврата 0, если всё в порядке):
 
