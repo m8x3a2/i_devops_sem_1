@@ -1,0 +1,40 @@
+---
+- name: Verify deployed configuration
+  hosts: vm
+  become: true
+  tasks:
+    - name: Check SSH effective configuration
+      ansible.builtin.command: /usr/sbin/sshd -T
+      register: sshd_effective
+      changed_when: false
+
+    - name: Assert password authentication is disabled
+      ansible.builtin.assert:
+        that:
+          - "'passwordauthentication no' in sshd_effective.stdout_lines"
+          - "'kbdinteractiveauthentication no' in sshd_effective.stdout_lines"
+          - "'permitrootlogin no' in sshd_effective.stdout_lines"
+          - "'pubkeyauthentication yes' in sshd_effective.stdout_lines"
+
+    - name: Read container facts
+      community.docker.docker_container_info:
+        name: "{{ app_container_name }}"
+      register: container_info
+
+    - name: Assert container is running
+      ansible.builtin.assert:
+        that:
+          - container_info.exists
+          - container_info.container.State.Running
+        fail_msg: "Контейнер {{ app_container_name }} отсутствует или остановлен."
+
+    - name: Check direct application health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_host_port }}/health"
+      register: direct_health
+
+    - name: Assert health payload
+      ansible.builtin.assert:
+        that:
+          - direct_health.status == 200
+          - (direct_health.json | default({})).get('status') == 'ok'

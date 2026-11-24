@@ -322,3 +322,29 @@ location /app/ {
 scp scripts/audit.sh devops:~/
 ssh -t devops 'bash ~/audit.sh; echo "exit code: $?"'
 ```
+
+## 12. Ansible для практической работы № 11
+
+Управляющий узел — Ubuntu в WSL. Рабочая копия находится внутри файловой системы WSL, а команды запускаются из каталога `ansible/`. Управляемый узел — Ubuntu Server 24.04 amd64 на `devops-vm`, сеть Host-only `192.168.56.101`, SSH-порт `22`.
+
+Этот сценарий начинается со снимка `01-clean-install`. `inventory/bootstrap.ini` использует `student` и интерактивный ввод для SSH и `sudo`. `inventory/prod.ini` использует `devops`, ключ `~/.ssh/devops_vm` и неинтерактивный `sudo`. Закрытый ключ хранится в домашнем каталоге управляющего узла с правами `0600`. Роли нужен соответствующий открытый ключ `~/.ssh/devops_vm.pub`. Если у существующего ключа этого файла нет, его можно получить командой `ssh-keygen -y -f ~/.ssh/devops_vm > ~/.ssh/devops_vm.pub`. Сначала сверяется отпечаток ключа ВМ, затем `host_key_checking` проверяет его при подключениях.
+
+| Роль | Ответственность |
+| --- | --- |
+| `base` | Системные пакеты, официальный репозиторий Docker, Docker Engine и запуск службы. |
+| `ssh` | Учётная запись, открытый ключ, `sudo`, отключение парольной аутентификации и UFW. |
+| `nginx` | HTTP reverse proxy, отключение стандартного сайта и проверка перед reload. |
+| `app` | Загрузка GHCR-образа, запуск контейнера и проверка `/health`. |
+
+Версия закреплена в `ansible/group_vars/all.yml`. Плейбук загружает `ghcr.io/m8x3a2/devops-ci-app:ddfba2bcc562adf477edfa512ce1f5df820cae60` перед изменением контейнера. Контейнер публикует `127.0.0.1:5000:5000`, а внешний запрос проходит через Nginx на `http://192.168.56.101/health`. Повторный запуск сверяет состояние со всеми четырьмя ролями.
+
+```bash
+cd ansible
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i inventory/bootstrap.ini site.yml --ask-pass --ask-become-pass
+ansible-playbook site.yml
+ansible-playbook verify.yml
+curl --fail http://192.168.56.101/health
+```
+
+`verify.yml` читает действующую конфигурацию SSH, состояние контейнера и ответ `/health`. Для восстановления контейнера или шаблона используется `site.yml`.
